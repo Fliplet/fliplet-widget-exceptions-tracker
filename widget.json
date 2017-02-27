@@ -1,0 +1,22 @@
+{
+  "name": "Exceptions Tracker",
+  "package": "com.fliplet.exceptions-tracker",
+  "version": "1.0.0",
+  "icon": "img/icon.png",
+  "tags": ["type:appComponent", "category:analytics"],
+  "provider_only": false,
+  "references": [],
+  "html_tag": "div",
+  "interface": {
+    "dependencies": [],
+    "assets": []
+  },
+  "build": {
+    "dependencies": [
+      "fliplet-core",
+      "!jquery",
+      "!ravenjs"
+    ],
+    "assets": []
+  }
+}
