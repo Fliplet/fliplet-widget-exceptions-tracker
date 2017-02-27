@@ -14,7 +14,6 @@
   "build": {
     "dependencies": [
       "fliplet-core",
-      "!jquery",
       "!ravenjs"
     ],
     "assets": []
