@@ -8,14 +8,20 @@
   "references": [],
   "html_tag": "div",
   "interface": {
-    "dependencies": [],
-    "assets": []
+    "dependencies": [
+      "fliplet-core"
+    ],
+    "assets": [
+      "js/interface.js"
+    ]
   },
   "build": {
     "dependencies": [
       "fliplet-core",
       "!ravenjs"
     ],
-    "assets": []
+    "assets": [
+      "js/build.js"
+    ]
   }
 }

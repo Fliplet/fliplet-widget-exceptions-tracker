@@ -1,0 +1,30 @@
+<div data-exceptions-tracker-id="{{id}}"></div>
+<script>
+  (function () {
+    var DEFAULT_DSN = 'https://f18abefeb96a41f9ab3080a40dac0426@sentry.io/138422';
+    var widgetNodes = document.querySelectorAll('[data-exceptions-tracker-id]');
+    if (!widgetNodes.length) {
+      return;
+    }
+
+    var widgetId = widgetNodes[0].dataset.exceptionsTrackerId;
+
+    if (!widgetId) {
+      return;
+    }
+
+    var data = window.__widgetData[widgetId].data;
+
+    var options = {
+      environment: Fliplet.Env.get('environment'),
+      transport: function (options) {
+        options.auth.auth_token = Fliplet.Env.get('user').auth_token;
+        options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
+        options.data.appId = Fliplet.Env.get('appId');
+        this.ea(options);
+      }
+    };
+
+    Raven.config(data.dsn || DEFAULT_DSN, options).install();
+  })();
+</script>

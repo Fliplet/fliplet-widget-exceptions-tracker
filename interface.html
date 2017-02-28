@@ -1,3 +1,13 @@
 <div>
-  <p>This widget requires no configuration.</p>
+  <p>Leave empty to use Fliplet Error tracker or if you own a Sentry Project you can use your DSN.</p>
+  <form class="form">
+    <div class="form-group clearfix">
+      <div class="col-sm-5">
+        <label for="dsn">DSN</label>
+        <input type="text" name="dsn" class="form-control" id="dsn" placeholder="https://public:secret@sentry.io/123456" required />
+      </div>
+    </div>
+    <hr />
+    <input type="reset" value="Clear">
+  </form>
 </div>
