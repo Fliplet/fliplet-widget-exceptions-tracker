@@ -1,13 +1,19 @@
 <div class="container-fluid">
-  <p>Leave empty to use Fliplet Error tracker or if you own a Sentry Project you can use your DSN.</p>
-  <form class="form">
-    <div class="form-group clearfix">
+  <form class="form-horizontal">
+    <div class="row no-gutters">
+        <p>Leave empty to use Fliplet Error tracker or if you own a Sentry Project you can use your DSN.</p>
+    </div>
+    <div class="form-group no-gutters clearfix">
       <div class="col-sm-5">
         <label for="dsn">DSN</label>
         <input type="text" name="dsn" class="form-control" id="dsn" placeholder="https://public:secret@sentry.io/123456" required />
       </div>
     </div>
-    <hr />
-    <input type="reset" value="Clear">
+    <div class="form-group no-gutters clearfix">
+      <div class="col-sm-12">
+        <hr />
+        <input type="reset" value="Clear">
+      </div>
+    </div>
   </form>
 </div>
