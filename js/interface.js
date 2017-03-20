@@ -9,6 +9,8 @@ if (data.dsn) {
   $('#dsn').val(dsn);
 }
 
+Fliplet.Widget.autosize();
+
 // Fired from Fliplet Studio when the external save button is clicked
 Fliplet.Widget.onSaveRequest(function saveSettings() {
   var dsn = $('#dsn').val();
