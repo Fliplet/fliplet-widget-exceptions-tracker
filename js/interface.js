@@ -15,7 +15,7 @@ Fliplet.Navigator.onReady().then(function () {
 
 // Fired from Fliplet Studio when the external save button is clicked
 Fliplet.Widget.onSaveRequest(function saveSettings() {
-  var dsn = $('#dsn').val();
+  var dsn = ''; // $('#dsn').val(); Use this to enable clients set own tracker
   if (dsn !== '') {
     var regex = /https:\/\/([a-z0-9]+):([a-z0-9]+)@sentry.io\/[0-9]+/g;
     var match = regex.exec(dsn);
