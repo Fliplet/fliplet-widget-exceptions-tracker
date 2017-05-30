@@ -2,6 +2,7 @@
   "name": "Exceptions Tracker",
   "package": "com.fliplet.exceptions-tracker",
   "version": "1.0.0",
+  "description": "<p>Enabling this will allow a technical person to track exceptions (app errors) for diagnosis and debugging.</p>",
   "icon": "img/icon.png",
   "tags": ["type:appComponent", "category:analytics"],
   "provider_only": false,
