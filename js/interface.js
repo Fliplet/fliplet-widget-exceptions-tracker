@@ -1,3 +1,6 @@
+Fliplet.Widget.autosize();
+Fliplet.Studio.emit('widget-save-label-update', {text: ''});
+
 var data = Fliplet.Widget.getData();
 if (data.dsn) {
   var position = data.dsn.indexOf('@');
@@ -8,10 +11,6 @@ if (data.dsn) {
   ].join('');
   $('#dsn').val(dsn);
 }
-
-Fliplet.Navigator.onReady().then(function () {
-  Fliplet.Widget.autosize();
-});
 
 // Fired from Fliplet Studio when the external save button is clicked
 Fliplet.Widget.onSaveRequest(function saveSettings() {
