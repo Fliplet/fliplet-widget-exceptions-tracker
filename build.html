@@ -7,24 +7,39 @@
       return;
     }
 
-    var widgetId = widgetNodes[0].dataset.exceptionsTrackerId;
+    var widgetInstanceId = widgetNodes[0].dataset.exceptionsTrackerId;
 
-    if (!widgetId) {
+    if (!widgetInstanceId) {
       return;
     }
 
-    var data = window.__widgetData[widgetId].data;
+    var data = window.__widgetData[widgetInstanceId].data;
+    var userToken = Fliplet.Env.get('user').auth_token || '';
 
-    var options = {
-      environment: Fliplet.Env.get('environment'),
-      transport: function (options) {
-        options.auth.auth_token = Fliplet.Env.get('user').auth_token;
-        options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
-        options.data.appId = Fliplet.Env.get('appId');
-        this.ea(options);
-      }
-    };
+    function installSentry() {
+      var options = {
+        environment: Fliplet.Env.get('environment'),
+        transport: function (options) {
+          options.auth.auth_token = userToken;
+          options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
+          options.data.appId = Fliplet.Env.get('appId');
+          this.ea(options);
+        }
+      };
 
-    Raven.config(data.dsn || DEFAULT_DSN, options).install();
+      Raven.config(data.dsn || DEFAULT_DSN, options).install();
+      console.debug('Exception tracker has been installed.');
+    }
+
+    if (userToken) {
+      return installSentry();
+    }
+
+    console.debug('Waiting for system to be ready before installing exception tracker...');
+
+    Fliplet().then(function () {
+      userToken = Fliplet.User.getAuthToken();
+      installSentry();
+    });
   })();
 </script>
