@@ -7,13 +7,13 @@
       return;
     }
 
-    var widgetId = widgetNodes[0].dataset.exceptionsTrackerId;
+    var widgetInstanceId = widgetNodes[0].dataset.exceptionsTrackerId;
 
-    if (!widgetId) {
+    if (!widgetInstanceId) {
       return;
     }
 
-    var data = window.__widgetData[widgetId].data;
+    var data = window.__widgetData[widgetInstanceId].data;
     var userToken = Fliplet.Env.get('user').auth_token || '';
 
     function installSentry() {
@@ -28,11 +28,14 @@
       };
 
       Raven.config(data.dsn || DEFAULT_DSN, options).install();
+      console.debug('Exception tracker has been installed.');
     }
 
     if (userToken) {
       return installSentry();
     }
+
+    console.debug('Waiting for system to be ready before installing exception tracker...');
 
     Fliplet().then(function () {
       userToken = Fliplet.User.getAuthToken();
