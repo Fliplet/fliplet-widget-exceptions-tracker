@@ -1,5 +1,5 @@
 {
-  "name": "System: Logging",
+  "name": "System: Error logging",
   "package": "com.fliplet.exceptions-tracker",
   "version": "1.0.0",
   "description": "<p>Enabling this will allow a technical person to track exceptions (app errors) for diagnosis and debugging.</p>",
