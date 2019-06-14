@@ -24,6 +24,22 @@
           options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
           options.data.appId = Fliplet.Env.get('appId');
           this.ea(options);
+        },
+        shouldSendCallback: function (data) {
+           // Always report errors on native platforms and widgets
+          if (Fliplet.Env.is('native') || !Fliplet.Env.get('mode')) {
+            return true;
+          }
+
+          // Don't report errors triggered from custom code in Studio
+          var triggeredFromCustomCode = !!data.breadcrumbs.values.find(function (breadcrumb) {
+            return breadcrumb.category === 'console'
+              && breadcrumb.level === 'error'
+              && breadcrumb.message
+              && breadcrumb.message.indexOf('JavaScript code has fired an error') !== -1;
+          });
+
+          return !triggeredFromCustomCode;
         }
       };
 
