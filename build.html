@@ -21,7 +21,13 @@
         environment: Fliplet.Env.get('environment'),
         transport: function (options) {
           options.auth.auth_token = userToken;
-          options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
+
+          // Proxy Sentry errors on native platforms because of a Cordova bug
+          // https://github.com/getsentry/sentry-javascript/issues/628
+          if (Fliplet.Env.is('native')) {
+            options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
+          }
+
           options.data.appId = Fliplet.Env.get('appId');
           this.ea(options);
         },
