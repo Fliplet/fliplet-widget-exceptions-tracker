@@ -42,12 +42,16 @@
           }
 
           // Don't report errors triggered from custom code on webapps and Studio
-          var triggeredFromCustomCode = !!data.breadcrumbs.values.find(function (breadcrumb) {
+          var triggeredFromCustomCode = data.breadcrumbs.values.find(function (breadcrumb) {
             return breadcrumb.category === 'console'
               && breadcrumb.level === 'error'
               && breadcrumb.message
               && breadcrumb.message.indexOf('JavaScript code has fired an error') !== -1;
           });
+
+          if (triggeredFromCustomCode) {
+            console.warn('An error has been filtered from being reported', triggeredFromCustomCode.message);
+          }
 
           return !triggeredFromCustomCode;
         }
