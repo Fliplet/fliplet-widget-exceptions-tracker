@@ -37,6 +37,10 @@
             return true;
           }
 
+          if (!data.breadcrumbs || !data.breadcrumbs.values) {
+            return true;
+          }
+
           // Don't report errors triggered from custom code on webapps and Studio
           var triggeredFromCustomCode = !!data.breadcrumbs.values.find(function (breadcrumb) {
             return breadcrumb.category === 'console'
