@@ -22,8 +22,6 @@
       "fliplet-core",
       "!ravenjs"
     ],
-    "assets": [
-      "js/build.js"
-    ]
+    "assets": []
   }
 }
