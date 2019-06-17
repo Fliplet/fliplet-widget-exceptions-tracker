@@ -22,11 +22,11 @@
         transport: function (options) {
           options.auth.auth_token = userToken;
 
-          // Proxy Sentry errors on native platforms because of a Cordova bug
-          // https://github.com/getsentry/sentry-javascript/issues/628
-          if (Fliplet.Env.is('native')) {
-            options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
-          }
+          /* Proxy errors for two reasons
+           * 1. Bug on Cordova https://github.com/getsentry/sentry-javascript/issues/628
+           * 2. We want to rate limit clients sending errors
+           */
+          options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
 
           options.data.appId = Fliplet.Env.get('appId');
           this.ea(options);
