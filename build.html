@@ -1,7 +1,9 @@
 <div data-exceptions-tracker-id="{{id}}"></div>
 <script>
   (function () {
-    var DEFAULT_DSN = 'https://f18abefeb96a41f9ab3080a40dac0426@sentry.io/138422';
+    // DSN for Production apps https://sentry.io/settings/fliplet/projects/production-apps
+    var DEFAULT_DSN = 'https://f18abefeb96a41f9ab3080a40dac0426@o37214.ingest.sentry.io/138422';
+
     var widgetNodes = document.querySelectorAll('[data-exceptions-tracker-id]');
     if (!widgetNodes.length) {
       return;
@@ -28,7 +30,6 @@
            */
           options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
 
-          options.data.appId = Fliplet.Env.get('appId');
           this.ea(options);
         },
         shouldSendCallback: function (data) {
@@ -57,7 +58,21 @@
         }
       };
 
+      var ctx = {
+        region: Fliplet.Env.get('region'),
+        environment: Fliplet.Env.get('environment'),
+        appName: Fliplet.Env.get('appName'),
+        appId: Fliplet.Env.get('appId'),
+        masterAppId: Fliplet.Env.get('masterAppId') || Fliplet.Env.get('appId'),
+        pageId: Fliplet.Env.get('pageId')
+      };
+
       Raven.config(data.dsn || DEFAULT_DSN, options).install();
+
+      Raven.setUserContext(Fliplet.Env.get('user'));
+      Raven.setExtraContext(ctx);
+      Raven.setTagsContext(ctx);
+
       console.debug('Exception tracker has been installed.');
     }
 
