@@ -29,7 +29,7 @@
            * 1. Bug on Cordova https://github.com/getsentry/sentry-javascript/issues/628
            * 2. We want to rate limit clients sending errors
            */
-          options.url = Fliplet.Env.get('apiUrl') + 'v1/raven';
+          options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + (data.dsn ? options.url : '');
 
           this.ea(options);
         },
@@ -68,7 +68,7 @@
         pageId: Fliplet.Env.get('pageId')
       };
 
-      Raven.config(DEFAULT_DSN, options).install();
+      Raven.config(data.dsn || DEFAULT_DSN, options).install();
 
       Raven.setUserContext(Fliplet.Env.get('user'));
       Raven.setExtraContext(ctx);
