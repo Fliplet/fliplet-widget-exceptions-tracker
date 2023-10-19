@@ -68,7 +68,7 @@
         pageId: Fliplet.Env.get('pageId')
       };
 
-      Raven.config(data.dsn || DEFAULT_DSN, options).install();
+      Raven.config(DEFAULT_DSN, options).install();
 
       Raven.setUserContext(Fliplet.Env.get('user'));
       Raven.setExtraContext(ctx);
