@@ -1,10 +1,11 @@
 <div data-exceptions-tracker-id="{{id}}"></div>
-<script>
-  (function () {
-    // DSN for Production apps https://sentry.io/settings/fliplet/projects/production-apps
+<script type="text/javascript">
+  (function() {
+    // DSN for Fliplet apps
     var DEFAULT_DSN = 'https://f18abefeb96a41f9ab3080a40dac0426@o37214.ingest.sentry.io/138422';
 
     var widgetNodes = document.querySelectorAll('[data-exceptions-tracker-id]');
+
     if (!widgetNodes.length) {
       return;
     }
@@ -21,18 +22,18 @@
     function installSentry() {
       var options = {
         environment: Fliplet.Env.get('environment'),
-        transport: function (options) {
+        transport: function(options) {
           options.auth.auth_token = userToken;
 
           /* Proxy errors for two reasons
            * 1. Bug on Cordova https://github.com/getsentry/sentry-javascript/issues/628
            * 2. We want to rate limit clients sending errors
            */
-          options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + options.url;
+          options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + (data.dsn ? options.url : '');
 
           this.ea(options);
         },
-        shouldSendCallback: function (data) {
+        shouldSendCallback: function(data) {
            // Always report errors on native platforms and widgets
           if (Fliplet.Env.is('native') || !Fliplet.Env.get('mode')) {
             return true;
@@ -43,7 +44,7 @@
           }
 
           // Don't report errors triggered from custom code on webapps and Studio
-          var triggeredFromCustomCode = data.breadcrumbs.values.find(function (breadcrumb) {
+          var triggeredFromCustomCode = data.breadcrumbs.values.find(function(breadcrumb) {
             return breadcrumb.category === 'console'
               && breadcrumb.level === 'error'
               && breadcrumb.message
@@ -82,7 +83,7 @@
 
     console.debug('Waiting for system to be ready before installing exception tracker...');
 
-    Fliplet().then(function () {
+    Fliplet().then(function() {
       userToken = Fliplet.User.getAuthToken();
       installSentry();
     });
