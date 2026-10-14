@@ -19,19 +19,96 @@
     var data = window.__widgetData[widgetInstanceId].data;
     var userToken = Fliplet.Env.get('user').auth_token || '';
 
+    /* DEV-1231: this add-on used to put the END USER's session token on the
+     * query string — `options.auth.auth_token`, which Raven serialises into
+     * the request URL — so every error report wrote a live credential into the
+     * app's URL, the CDN cache key and the API access logs (~1,540 requests a
+     * week across production). Send it as an `Auth-token` header instead.
+     *
+     * Raven's own sender (`this.ea`, _makeRequest in the pinned ravenjs 3.11.0
+     * that widget.json depends on) builds "POST <url>?<auth>" and has no way
+     * to set a header, so the request is made here instead.
+     *
+     * THE TRADE-OFF, AND WHY THERE IS A FALLBACK
+     * A custom header turns this from a CORS-simple POST into a preflighted
+     * one. The API should allow it — libs/cors.js sets no allowedHeaders, so
+     * the cors package echoes Access-Control-Request-Headers, and these
+     * requests arrive through CloudFront, which libs/cors.js grants on the
+     * `source: Cloudfront` header — but app origins are many and varied
+     * (custom domains, *.fliplet.com, iOS WKWebView, Android WebView), and a
+     * blocked preflight would stop error reporting SILENTLY: nobody notices
+     * reports that never arrive.
+     *
+     * So a request that fails outright falls back to Raven's original
+     * query-string sender, and the fallback is remembered for the rest of the
+     * page session so one blocked origin does not pay for a preflight on
+     * every subsequent error. The credential leaves the URL wherever the
+     * header works, and reporting keeps working where it does not.
+     */
+    var useHeaderTransport = true;
+
+    function sendWithHeader(raven, options) {
+      var request = new XMLHttpRequest();
+      var query = Object.keys(options.auth || {}).map(function(key) {
+        return encodeURIComponent(key) + '=' + encodeURIComponent(options.auth[key]);
+      });
+
+      function fallBackToQueryTransport() {
+        useHeaderTransport = false;
+        console.warn('Exception tracker: header transport unavailable, falling back to the query transport.');
+        options.auth.auth_token = userToken;
+        raven.ea(options);
+      }
+
+      request.open('POST', options.url + (query.length ? '?' + query.join('&') : ''));
+      request.setRequestHeader('Auth-token', userToken);
+
+      request.onreadystatechange = function() {
+        if (request.readyState !== 4) {
+          return;
+        }
+
+        if (request.status >= 200 && request.status < 400) {
+          if (options.onSuccess) {
+            options.onSuccess();
+          }
+
+          return;
+        }
+
+        // status 0 is a blocked preflight or a dead network — the case the
+        // fallback exists for. A real HTTP error (4xx/5xx) means the request
+        // reached the API, so the header transport works and retrying it on
+        // the query transport would only leak the credential for nothing.
+        if (request.status === 0) {
+          return fallBackToQueryTransport();
+        }
+
+        if (options.onError) {
+          options.onError(new Error('Sentry proxy responded ' + request.status));
+        }
+      };
+
+      request.send(JSON.stringify(options.data));
+    }
+
     function installSentry() {
       var options = {
         environment: Fliplet.Env.get('environment'),
         transport: function(options) {
-          options.auth.auth_token = userToken;
-
           /* Proxy errors for two reasons
            * 1. Bug on Cordova https://github.com/getsentry/sentry-javascript/issues/628
            * 2. We want to rate limit clients sending errors
            */
           options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + (data.dsn ? options.url : '');
 
-          this.ea(options);
+          if (!useHeaderTransport) {
+            options.auth.auth_token = userToken;
+
+            return this.ea(options);
+          }
+
+          sendWithHeader(this, options);
         },
         shouldSendCallback: function(data) {
            // Always report errors on native platforms and widgets
