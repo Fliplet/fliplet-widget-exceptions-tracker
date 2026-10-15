@@ -40,12 +40,72 @@
      * reports that never arrive.
      *
      * So a request that fails outright falls back to Raven's original
-     * query-string sender, and the fallback is remembered for the rest of the
-     * page session so one blocked origin does not pay for a preflight on
-     * every subsequent error. The credential leaves the URL wherever the
-     * header works, and reporting keeps working where it does not.
+     * query-string sender. That fallback used to be latched for the rest of
+     * the page session, which was wrong: XHR status 0 is an ordinary offline
+     * or dropped-network failure just as much as it is a blocked preflight, so
+     * a few seconds without connectivity put the live token back in the URL of
+     * every later report for as long as the page stayed open. It is now
+     * evidence-based and time-limited: an offline device does not downgrade at
+     * all, and a downgrade expires after HEADER_RETRY_AFTER or as soon as one
+     * header request succeeds.
      */
-    var useHeaderTransport = true;
+
+    // How long the query transport is used for after the header transport
+    // looks structurally blocked. Short enough that a page session recovers
+    // from a transient fault on its own, long enough that a genuinely blocked
+    // origin is not paying for a failed preflight on every single report.
+    var HEADER_RETRY_AFTER = 60000;
+    var headerTransportBlockedUntil = 0;
+
+    function headerTransportAvailable() {
+      return Date.now() >= headerTransportBlockedUntil;
+    }
+
+    /* Raven 3.11.0 serialises the payload with json-stringify-safe (module 1 of
+     * its browserify bundle; `c.send(y(a.data))` in _makeRequest). A plain
+     * JSON.stringify THROWS on a circular structure, and extra context and
+     * breadcrumbs routinely carry one — a DOM node, an event, an object that
+     * references its own parent. That throw happens after open() and before
+     * send(), so the report is lost and NEITHER completion callback runs.
+     *
+     * Same contract as the library: replace a circular reference with a
+     * "[Circular ~...]" marker rather than failing the send. Stack-based
+     * rather than a flat seen-list so a shared (but acyclic) reference — two
+     * breadcrumbs pointing at one object — still serialises in full instead of
+     * being falsely reported as circular.
+     */
+    function safeStringify(data) {
+      var stack = [];
+      var keys = [];
+
+      return JSON.stringify(data, function(key, value) {
+        if (stack.length === 0) {
+          stack.push(value);
+
+          return value;
+        }
+
+        var parentIndex = stack.indexOf(this);
+
+        if (parentIndex === -1) {
+          stack.push(this);
+          keys.push(key);
+        } else {
+          stack.splice(parentIndex + 1);
+          keys.splice(parentIndex, Infinity, key);
+        }
+
+        var cycleIndex = stack.indexOf(value);
+
+        if (cycleIndex !== -1) {
+          var path = keys.slice(0, cycleIndex).join('.');
+
+          return '[Circular ~' + (path ? '.' + path : '') + ']';
+        }
+
+        return value;
+      });
+    }
 
     function sendWithHeader(raven, options) {
       var request = new XMLHttpRequest();
@@ -53,9 +113,27 @@
         return encodeURIComponent(key) + '=' + encodeURIComponent(options.auth[key]);
       });
 
+      /* Raven's failure handler only engages its rate-limit backoff when the
+       * error carries the XHR: `d.request && c.ba(d.request)`. Its own sender
+       * sets `b.request = c` for exactly that reason. Without it a 429 or a
+       * 401 from a misconfigured DSN leaves backoff disabled and the client
+       * keeps hammering the proxy.
+       */
+      function reportFailure() {
+        if (!options.onError) {
+          return;
+        }
+
+        var error = new Error('Sentry proxy responded ' + request.status);
+
+        error.request = request;
+        options.onError(error);
+      }
+
       function fallBackToQueryTransport() {
-        useHeaderTransport = false;
-        console.warn('Exception tracker: header transport unavailable, falling back to the query transport.');
+        headerTransportBlockedUntil = Date.now() + HEADER_RETRY_AFTER;
+        console.warn('Exception tracker: header transport unavailable, using the query transport for the next '
+          + (HEADER_RETRY_AFTER / 1000) + 's.');
         options.auth.auth_token = userToken;
         raven.ea(options);
       }
@@ -69,6 +147,10 @@
         }
 
         if (request.status >= 200 && request.status < 400) {
+          // Proof the header transport works here. Clear any block an earlier
+          // transient failure set, so one bad moment cannot outlive itself.
+          headerTransportBlockedUntil = 0;
+
           if (options.onSuccess) {
             options.onSuccess();
           }
@@ -76,20 +158,26 @@
           return;
         }
 
-        // status 0 is a blocked preflight or a dead network — the case the
-        // fallback exists for. A real HTTP error (4xx/5xx) means the request
-        // reached the API, so the header transport works and retrying it on
-        // the query transport would only leak the credential for nothing.
-        if (request.status === 0) {
-          return fallBackToQueryTransport();
+        // A real HTTP status means the request reached the API, so the header
+        // transport works and retrying on the query transport would only leak
+        // the credential for nothing.
+        if (request.status !== 0) {
+          return reportFailure();
         }
 
-        if (options.onError) {
-          options.onError(new Error('Sentry proxy responded ' + request.status));
+        // Status 0: either a blocked preflight or no usable network. When the
+        // device is simply offline the query transport would fail in exactly
+        // the same way, so downgrading gains nothing, teaches us nothing about
+        // CORS, and would put the token back in the URL for every later
+        // report. Report the failure and leave the transport alone.
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          return reportFailure();
         }
+
+        return fallBackToQueryTransport();
       };
 
-      request.send(JSON.stringify(options.data));
+      request.send(safeStringify(options.data));
     }
 
     function installSentry() {
@@ -102,7 +190,7 @@
            */
           options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + (data.dsn ? options.url : '');
 
-          if (!useHeaderTransport) {
+          if (!headerTransportAvailable()) {
             options.auth.auth_token = userToken;
 
             return this.ea(options);
