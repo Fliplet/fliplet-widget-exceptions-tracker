@@ -29,37 +29,41 @@
      * that widget.json depends on) builds "POST <url>?<auth>" and has no way
      * to set a header, so the request is made here instead.
      *
-     * THE TRADE-OFF, AND WHY THERE IS A FALLBACK
+     * THERE IS NO QUERY-STRING FALLBACK, AND THAT IS DELIBERATE
      * A custom header turns this from a CORS-simple POST into a preflighted
-     * one. The API should allow it — libs/cors.js sets no allowedHeaders, so
-     * the cors package echoes Access-Control-Request-Headers, and these
-     * requests arrive through CloudFront, which libs/cors.js grants on the
-     * `source: Cloudfront` header — but app origins are many and varied
-     * (custom domains, *.fliplet.com, iOS WKWebView, Android WebView), and a
-     * blocked preflight would stop error reporting SILENTLY: nobody notices
-     * reports that never arrive.
+     * one, so earlier versions of this kept Raven's query sender as a safety
+     * net in case some app origin's preflight was blocked — on the reasoning
+     * that a blocked preflight would stop error reporting silently, and nobody
+     * notices reports that never arrive.
      *
-     * So a request that fails outright falls back to Raven's original
-     * query-string sender. That fallback used to be latched for the rest of
-     * the page session, which was wrong: XHR status 0 is an ordinary offline
-     * or dropped-network failure just as much as it is a blocked preflight, so
-     * a few seconds without connectivity put the live token back in the URL of
-     * every later report for as long as the page stayed open. It is now
-     * evidence-based and time-limited: an offline device does not downgrade at
-     * all, and a downgrade expires after HEADER_RETRY_AFTER or as soon as one
-     * header request succeeds.
+     * That net could never be made safe. Latched for the page session, a few
+     * seconds offline put the live token in the URL of every later report;
+     * bounded to a 60s window instead, it still re-sent a credential-bearing
+     * URL every 60s to any origin that really was blocked. A timer limits how
+     * OFTEN the credential is exposed, never WHETHER it is.
+     *
+     * It is also unnecessary, and the proof is the platform's own main traffic
+     * path. fliplet-core — loaded on every Fliplet screen — sets
+     * `Authorization: Bearer <base64 token>`, `X-Device-Platform`,
+     * `X-Device-Tracking` and `X-App-Locales` on every API request it makes
+     * (public/assets/fliplet-core/1.0/core.js, in fliplet-api). Every one of
+     * those is a non-simple header, so every screen on every origin — custom
+     * domains, *.fliplet.com, iOS WKWebView, Android WebView — is already
+     * doing preflighted cross-origin calls to this API in production, through
+     * the same app-wide libs/cors.js that guards /v1/raven (mounted at
+     * app.js:304, ahead of the route at app.js:596). The grant there depends
+     * on origin, user agent and the CloudFront headers, not on which header
+     * the request wants to send: allowedHeaders is unset, so the cors package
+     * echoes Access-Control-Request-Headers once the origin is granted.
+     *
+     * So an origin where this preflight fails is an origin where fliplet-core
+     * cannot reach the API at all — an app with no working API calls, and no
+     * error reports to lose. The net was guarding a case that cannot occur in
+     * isolation, at the cost of the only thing this change exists to achieve.
+     *
+     * A failed send now simply reports the failure, exactly as it would if the
+     * query transport had been used and the device were offline.
      */
-
-    // How long the query transport is used for after the header transport
-    // looks structurally blocked. Short enough that a page session recovers
-    // from a transient fault on its own, long enough that a genuinely blocked
-    // origin is not paying for a failed preflight on every single report.
-    var HEADER_RETRY_AFTER = 60000;
-    var headerTransportBlockedUntil = 0;
-
-    function headerTransportAvailable() {
-      return Date.now() >= headerTransportBlockedUntil;
-    }
 
     /* Raven 3.11.0 serialises the payload with json-stringify-safe (module 1 of
      * its browserify bundle; `c.send(y(a.data))` in _makeRequest). A plain
@@ -107,8 +111,11 @@
       });
     }
 
-    function sendWithHeader(raven, options) {
+    function sendWithHeader(options) {
       var request = new XMLHttpRequest();
+      // Sentry's OWN auth params (sentry_key, sentry_version…) stay on the
+      // query string — that is where Sentry expects them, and none of them is
+      // a Fliplet credential. Only `auth_token` ever has to come off.
       var query = Object.keys(options.auth || {}).map(function(key) {
         return encodeURIComponent(key) + '=' + encodeURIComponent(options.auth[key]);
       });
@@ -130,14 +137,6 @@
         options.onError(error);
       }
 
-      function fallBackToQueryTransport() {
-        headerTransportBlockedUntil = Date.now() + HEADER_RETRY_AFTER;
-        console.warn('Exception tracker: header transport unavailable, using the query transport for the next '
-          + (HEADER_RETRY_AFTER / 1000) + 's.');
-        options.auth.auth_token = userToken;
-        raven.ea(options);
-      }
-
       request.open('POST', options.url + (query.length ? '?' + query.join('&') : ''));
       request.setRequestHeader('Auth-token', userToken);
 
@@ -147,10 +146,6 @@
         }
 
         if (request.status >= 200 && request.status < 400) {
-          // Proof the header transport works here. Clear any block an earlier
-          // transient failure set, so one bad moment cannot outlive itself.
-          headerTransportBlockedUntil = 0;
-
           if (options.onSuccess) {
             options.onSuccess();
           }
@@ -158,23 +153,11 @@
           return;
         }
 
-        // A real HTTP status means the request reached the API, so the header
-        // transport works and retrying on the query transport would only leak
-        // the credential for nothing.
-        if (request.status !== 0) {
-          return reportFailure();
-        }
-
-        // Status 0: either a blocked preflight or no usable network. When the
-        // device is simply offline the query transport would fail in exactly
-        // the same way, so downgrading gains nothing, teaches us nothing about
-        // CORS, and would put the token back in the URL for every later
-        // report. Report the failure and leave the transport alone.
-        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-          return reportFailure();
-        }
-
-        return fallBackToQueryTransport();
+        // Every failure is reported the same way, whether it is an HTTP status
+        // or a status 0 from a dead network. There is nothing to fall back to:
+        // see the note above on why a query-string retry cannot be made safe
+        // and is not needed.
+        return reportFailure();
       };
 
       request.send(safeStringify(options.data));
@@ -190,13 +173,7 @@
            */
           options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + (data.dsn ? options.url : '');
 
-          if (!headerTransportAvailable()) {
-            options.auth.auth_token = userToken;
-
-            return this.ea(options);
-          }
-
-          sendWithHeader(this, options);
+          sendWithHeader(options);
         },
         shouldSendCallback: function(data) {
            // Always report errors on native platforms and widgets

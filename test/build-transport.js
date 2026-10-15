@@ -4,13 +4,12 @@
 // <script> in a vm with Fliplet, Raven, document and XMLHttpRequest stubbed,
 // then drives Raven's transport callback directly. Run with: node test/build-transport.js
 //
-// What it pins down: the credential leaves the URL and travels as a header; a
-// blocked preflight (status 0) falls back to Raven's query sender but only for
-// a bounded window, so a transient fault cannot keep the token in the URL for
-// the rest of the page session; an offline device does not downgrade at all; a
-// real HTTP error does NOT fall back, so a rate-limit response can never push
-// the token back into a URL; a circular payload still sends; and a failure
-// carries the XHR that Raven's backoff requires.
+// What it pins down: the credential leaves the URL and travels as a header,
+// and NO failure path ever puts it back — there is no query-string fallback at
+// all, so neither a blocked preflight, an offline device, a rate limit nor five
+// consecutive failures can produce a URL containing the token. Also: a circular
+// payload still sends, and a failure carries the XHR that Raven's backoff
+// requires.
 
 const fs = require('fs');
 const vm = require('vm');
@@ -99,65 +98,56 @@ check('Auth-token header set', xhr.headers['Auth-token'] === 'eu--session--SECRE
 check('body is the serialised payload', xhr.body === JSON.stringify({ msg: 'boom' }), xhr.body);
 check('legacy sender not used', !sb.Raven.legacyCalls);
 
-// --- Case 2: blocked preflight -> bounded fallback
-console.log('Case 2: status 0 falls back, but only for a bounded window');
+// --- Case 2: there is NO query-string fallback, ever
+// This replaces a family of cases that asserted the fallback's behaviour
+// (latched, then time-bounded). Both were attempts to make a credential-bearing
+// retry safe; neither could, because a timer limits how OFTEN the token is
+// exposed and never WHETHER it is. The fallback is gone — see the note in
+// build.html for why it is also unnecessary.
+console.log('Case 2: status 0 never falls back to the query transport');
+let err0 = null;
+opts = transportOptions();
+opts.onError = (e) => { err0 = e; };
+ravenConfig.transport.call(sb.Raven, opts);
+xhr = xhrs[xhrs.length - 1];
 xhr.readyState = 4; xhr.status = 0; xhr.onreadystatechange();
-check('legacy sender used once', sb.Raven.legacyCalls === 1, String(sb.Raven.legacyCalls));
-check('fallback re-added auth_token', sb.Raven.lastLegacy.auth.auth_token === 'eu--session--SECRET');
+check('legacy query sender NOT used', !sb.Raven.legacyCalls, String(sb.Raven.legacyCalls));
+check('failure reported instead', !!err0);
+check('error carries the XHR for backoff', err0 && err0.request === xhr);
+
+console.log('Case 2b: later reports still use the header transport');
 let before = xhrs.length;
 ravenConfig.transport.call(sb.Raven, transportOptions());
-check('no preflight retried inside the window', xhrs.length === before, String(xhrs.length));
-check('legacy sender used again inside the window', sb.Raven.legacyCalls === 2, String(sb.Raven.legacyCalls));
-
-// THE REGRESSION THIS CASE EXISTS FOR. The fallback used to be latched for the
-// page session, so a few seconds offline put the live token in the URL of every
-// later report for as long as the page stayed open.
-console.log('Case 2b: the header transport is retried once the window elapses');
-clock += 60001;
-before = xhrs.length;
-const legacyBefore = sb.Raven.legacyCalls;
-ravenConfig.transport.call(sb.Raven, transportOptions());
 check('a new header attempt is made', xhrs.length === before + 1, String(xhrs.length));
-check('legacy sender NOT used again', sb.Raven.legacyCalls === legacyBefore, String(sb.Raven.legacyCalls));
 const retried = xhrs[xhrs.length - 1];
 check('retry carries the header', retried.headers['Auth-token'] === 'eu--session--SECRET');
 check('retry URL has no credential', retried.url.indexOf('SECRET') === -1, retried.url);
+check('still no legacy sender', !sb.Raven.legacyCalls, String(sb.Raven.legacyCalls));
 
-console.log('Case 2c: a success clears the block immediately');
+console.log('Case 2c: repeated status-0 failures never produce a token in a URL');
 sb = makeSandbox();
-ravenConfig.transport.call(sb.Raven, transportOptions());
-xhrs[0].readyState = 4; xhrs[0].status = 0; xhrs[0].onreadystatechange();
-check('fell back after status 0', sb.Raven.legacyCalls === 1);
-clock += 60001;
-ravenConfig.transport.call(sb.Raven, transportOptions());
-const recovered = xhrs[xhrs.length - 1];
-recovered.readyState = 4; recovered.status = 200; recovered.onreadystatechange();
-// Block cleared by the success, so the very next report must not wait out
-// another window.
-before = xhrs.length;
-ravenConfig.transport.call(sb.Raven, transportOptions());
-check('next report uses the header transport straight away', xhrs.length === before + 1, String(xhrs.length));
-check('legacy sender still used only once in total', sb.Raven.legacyCalls === 1, String(sb.Raven.legacyCalls));
+for (let i = 0; i < 5; i++) {
+  const o = transportOptions();
+  o.onError = () => {};
+  ravenConfig.transport.call(sb.Raven, o);
+  const x = xhrs[xhrs.length - 1];
+  x.readyState = 4; x.status = 0; x.onreadystatechange();
+}
+check('no legacy sender after 5 failures', !sb.Raven.legacyCalls, String(sb.Raven.legacyCalls));
+check('no XHR url ever contained the token',
+  xhrs.every((x) => x.url.indexOf('SECRET') === -1 && x.url.indexOf('auth_token') === -1));
 
-// --- Case 2d: offline must not downgrade at all
-console.log('Case 2d: an offline device does not put the token back in a URL');
+console.log('Case 2d: an offline device behaves the same way');
 sb = makeSandbox();
 sb.navigator.onLine = false;
 let offlineErr = null;
 let offlineOpts = transportOptions();
-offlineOpts.onError = (err) => { offlineErr = err; };
+offlineOpts.onError = (e) => { offlineErr = e; };
 ravenConfig.transport.call(sb.Raven, offlineOpts);
 const offlineXhr = xhrs[xhrs.length - 1];
 offlineXhr.readyState = 4; offlineXhr.status = 0; offlineXhr.onreadystatechange();
-// The query transport would have failed in exactly the same way, so there is
-// nothing to gain by downgrading and a credential to lose.
 check('legacy sender NOT used', !sb.Raven.legacyCalls, String(sb.Raven.legacyCalls));
 check('onError reported', !!offlineErr);
-before = xhrs.length;
-sb.navigator.onLine = true;
-ravenConfig.transport.call(sb.Raven, transportOptions());
-check('transport not downgraded for later reports', xhrs.length === before + 1, String(xhrs.length));
-check('still no legacy sender', !sb.Raven.legacyCalls, String(sb.Raven.legacyCalls));
 
 // --- Case 3: a real HTTP error does NOT fall back
 console.log('Case 3: a 4xx does not fall back to the query transport');
