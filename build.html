@@ -19,19 +19,161 @@
     var data = window.__widgetData[widgetInstanceId].data;
     var userToken = Fliplet.Env.get('user').auth_token || '';
 
+    /* DEV-1231: this add-on used to put the END USER's session token on the
+     * query string — `options.auth.auth_token`, which Raven serialises into
+     * the request URL — so every error report wrote a live credential into the
+     * app's URL, the CDN cache key and the API access logs (~1,540 requests a
+     * week across production). Send it as an `Auth-token` header instead.
+     *
+     * Raven's own sender (`this.ea`, _makeRequest in the pinned ravenjs 3.11.0
+     * that widget.json depends on) builds "POST <url>?<auth>" and has no way
+     * to set a header, so the request is made here instead.
+     *
+     * THERE IS NO QUERY-STRING FALLBACK, AND THAT IS DELIBERATE
+     * A custom header turns this from a CORS-simple POST into a preflighted
+     * one, so earlier versions of this kept Raven's query sender as a safety
+     * net in case some app origin's preflight was blocked — on the reasoning
+     * that a blocked preflight would stop error reporting silently, and nobody
+     * notices reports that never arrive.
+     *
+     * That net could never be made safe. Latched for the page session, a few
+     * seconds offline put the live token in the URL of every later report;
+     * bounded to a 60s window instead, it still re-sent a credential-bearing
+     * URL every 60s to any origin that really was blocked. A timer limits how
+     * OFTEN the credential is exposed, never WHETHER it is.
+     *
+     * It is also unnecessary, and the proof is the platform's own main traffic
+     * path. fliplet-core — loaded on every Fliplet screen — sets
+     * `Authorization: Bearer <base64 token>`, `X-Device-Platform`,
+     * `X-Device-Tracking` and `X-App-Locales` on every API request it makes
+     * (public/assets/fliplet-core/1.0/core.js, in fliplet-api). Every one of
+     * those is a non-simple header, so every screen on every origin — custom
+     * domains, *.fliplet.com, iOS WKWebView, Android WebView — is already
+     * doing preflighted cross-origin calls to this API in production, through
+     * the same app-wide libs/cors.js that guards /v1/raven (mounted at
+     * app.js:304, ahead of the route at app.js:596). The grant there depends
+     * on origin, user agent and the CloudFront headers, not on which header
+     * the request wants to send: allowedHeaders is unset, so the cors package
+     * echoes Access-Control-Request-Headers once the origin is granted.
+     *
+     * So an origin where this preflight fails is an origin where fliplet-core
+     * cannot reach the API at all — an app with no working API calls, and no
+     * error reports to lose. The net was guarding a case that cannot occur in
+     * isolation, at the cost of the only thing this change exists to achieve.
+     *
+     * A failed send now simply reports the failure, exactly as it would if the
+     * query transport had been used and the device were offline.
+     */
+
+    /* Raven 3.11.0 serialises the payload with json-stringify-safe (module 1 of
+     * its browserify bundle; `c.send(y(a.data))` in _makeRequest). A plain
+     * JSON.stringify THROWS on a circular structure, and extra context and
+     * breadcrumbs routinely carry one — a DOM node, an event, an object that
+     * references its own parent. That throw happens after open() and before
+     * send(), so the report is lost and NEITHER completion callback runs.
+     *
+     * Same contract as the library: replace a circular reference with a
+     * "[Circular ~...]" marker rather than failing the send. Stack-based
+     * rather than a flat seen-list so a shared (but acyclic) reference — two
+     * breadcrumbs pointing at one object — still serialises in full instead of
+     * being falsely reported as circular.
+     */
+    function safeStringify(data) {
+      var stack = [];
+      var keys = [];
+
+      return JSON.stringify(data, function(key, value) {
+        if (stack.length === 0) {
+          stack.push(value);
+
+          return value;
+        }
+
+        var parentIndex = stack.indexOf(this);
+
+        if (parentIndex === -1) {
+          stack.push(this);
+          keys.push(key);
+        } else {
+          stack.splice(parentIndex + 1);
+          keys.splice(parentIndex, Infinity, key);
+        }
+
+        var cycleIndex = stack.indexOf(value);
+
+        if (cycleIndex !== -1) {
+          var path = keys.slice(0, cycleIndex).join('.');
+
+          return '[Circular ~' + (path ? '.' + path : '') + ']';
+        }
+
+        return value;
+      });
+    }
+
+    function sendWithHeader(options) {
+      var request = new XMLHttpRequest();
+      // Sentry's OWN auth params (sentry_key, sentry_version…) stay on the
+      // query string — that is where Sentry expects them, and none of them is
+      // a Fliplet credential. Only `auth_token` ever has to come off.
+      var query = Object.keys(options.auth || {}).map(function(key) {
+        return encodeURIComponent(key) + '=' + encodeURIComponent(options.auth[key]);
+      });
+
+      /* Raven's failure handler only engages its rate-limit backoff when the
+       * error carries the XHR: `d.request && c.ba(d.request)`. Its own sender
+       * sets `b.request = c` for exactly that reason. Without it a 429 or a
+       * 401 from a misconfigured DSN leaves backoff disabled and the client
+       * keeps hammering the proxy.
+       */
+      function reportFailure() {
+        if (!options.onError) {
+          return;
+        }
+
+        var error = new Error('Sentry proxy responded ' + request.status);
+
+        error.request = request;
+        options.onError(error);
+      }
+
+      request.open('POST', options.url + (query.length ? '?' + query.join('&') : ''));
+      request.setRequestHeader('Auth-token', userToken);
+
+      request.onreadystatechange = function() {
+        if (request.readyState !== 4) {
+          return;
+        }
+
+        if (request.status >= 200 && request.status < 400) {
+          if (options.onSuccess) {
+            options.onSuccess();
+          }
+
+          return;
+        }
+
+        // Every failure is reported the same way, whether it is an HTTP status
+        // or a status 0 from a dead network. There is nothing to fall back to:
+        // see the note above on why a query-string retry cannot be made safe
+        // and is not needed.
+        return reportFailure();
+      };
+
+      request.send(safeStringify(options.data));
+    }
+
     function installSentry() {
       var options = {
         environment: Fliplet.Env.get('environment'),
         transport: function(options) {
-          options.auth.auth_token = userToken;
-
           /* Proxy errors for two reasons
            * 1. Bug on Cordova https://github.com/getsentry/sentry-javascript/issues/628
            * 2. We want to rate limit clients sending errors
            */
           options.url = Fliplet.Env.get('apiUrl') + 'v1/raven/' + (data.dsn ? options.url : '');
 
-          this.ea(options);
+          sendWithHeader(options);
         },
         shouldSendCallback: function(data) {
            // Always report errors on native platforms and widgets
